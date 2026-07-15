@@ -1,0 +1,205 @@
+:root {
+  /* === Палитра: премиальная зелёно-золотая, глубокие градиенты === */
+  --color-primary: #1f6b3a;
+  --color-primary-dark: #0f3d22;
+  --color-primary-light: #8fca85;
+  --color-primary-soft: #e6f2e1;
+
+  --color-gold: #d4a04a;
+  --color-gold-light: #f5d68a;
+
+  --color-bg: #fafaf7;
+  --color-bg-grad-from: #f7f5ee;
+  --color-bg-grad-to: #ebe5d3;
+
+  --color-surface: #ffffff;
+  --color-surface-2: #faf7f0;
+  --color-surface-3: #f1ecdf;
+
+  --color-text: #1a1a17;
+  --color-text-muted: #6b6657;
+  --color-accent: #c75a35;
+  --color-accent-light: #f4b89e;
+  --color-border: #e5dfcc;
+  --color-border-soft: #efeada;
+  --color-danger: #c0392b;
+  --color-success: #2d8a4a;
+
+  /* Тени — мягкие, слоистые */
+  --shadow-xs: 0 1px 2px rgba(28, 35, 25, 0.05);
+  --shadow-sm: 0 2px 6px rgba(28, 35, 25, 0.06);
+  --shadow-md: 0 6px 18px rgba(28, 35, 25, 0.08);
+  --shadow-lg: 0 12px 30px rgba(28, 35, 25, 0.12);
+  --shadow-xl: 0 24px 60px rgba(28, 35, 25, 0.16);
+  --shadow-glow: 0 8px 32px rgba(31, 107, 58, 0.22);
+  --shadow-gold: 0 8px 32px rgba(212, 160, 74, 0.18);
+
+  /* Радиусы */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-2xl: 40px;
+  --radius-pill: 999px;
+
+  /* Шрифты: системные, но с улучшенным рендерингом */
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI',
+    Roboto, system-ui, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
+    Roboto, system-ui, sans-serif;
+
+  /* iOS safe areas */
+  --safe-top: env(safe-area-inset-top, 0);
+  --safe-bottom: env(safe-area-inset-bottom, 0);
+
+  /* Контейнер */
+  --container-max: 480px;
+  --container-radius: 36px;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  /*
+   * Запрет зума на уровне CSS (самый надёжный, не зависит от JS).
+   * `touch-action: manipulation` НЕ запрещает pinch/double-tap zoom в iOS Safari.
+   * `pan-x pan-y` разрешает только однопалечный скролл — мульти-тач
+   * (pinch) и double-tap (zoom) браузер игнорирует.
+   */
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: linear-gradient(165deg, #ecead9 0%, #d8d4be 100%);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+  font-feature-settings: 'ss01', 'cv11';
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  /* Кнопкам тоже нельзя выделять текст/изображения при зажатии */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Но в полях ввода — выделение обязательно */
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  /* В полях — снова разрешаем манипуляции с текстом */
+  touch-action: manipulation;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+h1 { font-size: 28px; }
+h2 { font-size: 20px; }
+h3 { font-size: 16px; }
+h4 {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+p { margin: 0 0 8px; }
+
+ul, ol { margin: 0; padding-left: 18px; }
+
+/* === Контейнер приложения === */
+.app {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--container-max);
+  min-height: 100dvh;
+  margin-left: auto;
+  margin-right: auto;
+  background: linear-gradient(180deg, var(--color-bg) 0%, var(--color-bg-grad-to) 100%);
+  position: relative;
+}
+
+@media (min-width: 481px) {
+  .app {
+    border-radius: var(--container-radius);
+    margin-top: 16px;
+    margin-bottom: 16px;
+    height: calc(100dvh - 32px);
+    min-height: 0;
+    overflow: hidden;
+    box-shadow: 0 0 80px rgba(0, 0, 0, 0.1);
+  }
+}
+
+/* === Скроллбар === */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* === Утилиты === */
+.gradient-primary {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+}
+
+.gradient-gold {
+  background: linear-gradient(135deg, var(--color-gold) 0%, var(--color-accent) 100%);
+}
+
+.gradient-soft {
+  background: linear-gradient(135deg, var(--color-primary-soft) 0%, #f1ebd9 100%);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+/* === Selection === */
+::selection {
+  background: var(--color-primary-light);
+  color: var(--color-primary-dark);
+}

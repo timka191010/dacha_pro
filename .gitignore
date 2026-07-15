@@ -1,0 +1,20 @@
+node_modules
+dist
+.DS_Store
+*.log
+.vite
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# === Секреты — НИКОГДА не в репо ===
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+
+# Python
+__pycache__
+*.py[cod]
+.venv
