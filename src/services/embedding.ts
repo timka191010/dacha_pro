@@ -27,9 +27,22 @@ env.allowRemoteModels = true;
 // Отключаем загрузку локальных ONNX-файлов по абсолютному пути (только Hub)
 env.localModelPath = '';
 
+// ВАЖНО для iOS Safari: без явного remote-host иногда ломается загрузка
+// ONNX Runtime Web (wasm) бандла с jsDelivr CDN.
+try {
+  // @ts-ignore — поле может отсутствовать в типах
+  if (env.backends?.onnx?.wasm) {
+    // @ts-ignore
+    env.backends.onnx.wasm.proxy = false;
+  }
+} catch {
+  // ignore — поле может быть недоступно в старых версиях
+}
+
 // === Singleton ===
 
 let extractorPromise: Promise<FeatureExtractionPipeline> | null = null;
+let resolvedDevice: 'webgpu' | 'wasm' | null = null;
 
 export type ProgressCallback = (info: {
   status: string;
@@ -43,30 +56,85 @@ export type ProgressCallback = (info: {
 /**
  * Загружает модель (один раз, потом из кэша).
  * Прогресс можно отслеживать через onProgress.
+ *
+ * Стратегия выбора бэкенда:
+ *  1) Пробуем WebGPU (Chrome/Edge/Android, быстрый inference).
+ *  2) Если WebGPU недоступен или падает (iOS Safari) — fallback на WASM.
+ *  3) WASM работает ВЕЗДЕ (iPhone, Android, desktop) — медленнее, но надёжно.
+ *
+ * На iPhone 13 Pro (Safari) WebGPU часто выдаёт "webgpuInit is not a function"
+ * из-за кривого ONNX Runtime Web бандла. Поэтому дефолт — WASM, WebGPU только
+ * если явно проверен через hasWebGPU().
  */
 export async function getEmbedder(
   onProgress?: ProgressCallback
 ): Promise<FeatureExtractionPipeline> {
   if (extractorPromise) return extractorPromise;
 
-  // Используем quantized модель (q8) — ~100 МБ вместо 470 МБ.
-  // Xenova/multilingual-e5-small — официальное зеркало ONNX-версии.
-  extractorPromise = pipeline(
-    'feature-extraction',
-    'Xenova/multilingual-e5-small',
-    {
-      // quantized: true,  // по умолчанию уже true для feature-extraction
-      dtype: 'q8',       // int8-квантование, ~100 МБ
-      device: 'webgpu',   // авто-fallback на wasm если WebGPU недоступен
-      progress_callback: onProgress,
-    } as any
-  ) as Promise<FeatureExtractionPipeline>;
+  // Сначала проверяем WebGPU. Если его нет — сразу WASM.
+  const useWebGPU = await hasWebGPU();
+  resolvedDevice = useWebGPU ? 'webgpu' : 'wasm';
 
-  return extractorPromise;
+  // Попытка 1: выбранный бэкенд
+  try {
+    extractorPromise = pipeline(
+      'feature-extraction',
+      'Xenova/multilingual-e5-small',
+      {
+        dtype: 'q8',                  // int8-квантование, ~100 МБ
+        device: resolvedDevice,
+        progress_callback: onProgress,
+      } as any
+    ) as Promise<FeatureExtractionPipeline>;
+    return await extractorPromise;
+  } catch (err) {
+    // Если выбранный бэкенд упал при загрузке (например WebGPU на iPhone) —
+    // сбрасываем singleton и пробуем WASM.
+    if (resolvedDevice === 'webgpu') {
+      console.warn('[embedding] WebGPU init failed, falling back to WASM:', err);
+      extractorPromise = null;
+      resolvedDevice = 'wasm';
+      extractorPromise = pipeline(
+        'feature-extraction',
+        'Xenova/multilingual-e5-small',
+        {
+          dtype: 'q8',
+          device: 'wasm',
+          progress_callback: onProgress,
+        } as any
+      ) as Promise<FeatureExtractionPipeline>;
+      return await extractorPromise;
+    }
+    // WASM тоже упал — сбрасываем singleton чтобы юзер мог попробовать ещё раз
+    extractorPromise = null;
+    resolvedDevice = null;
+    throw err;
+  }
+}
+
+/**
+ * Сбрасывает singleton (для retry после ошибки).
+ */
+export function resetEmbedder(): void {
+  extractorPromise = null;
+  resolvedDevice = null;
+}
+
+/**
+ * Какой бэкенд реально используется (для UI/дебага).
+ */
+export function getActiveDevice(): 'webgpu' | 'wasm' | null {
+  return resolvedDevice;
 }
 
 /**
  * Проверяет поддержку WebGPU (для UI: показать предупреждение если нет).
+ *
+ * Возвращает true ТОЛЬКО если WebGPU реально работает: есть navigator.gpu,
+ * адаптер запрашивается без ошибок И можно получить device.
+ * Это важно, потому что на iOS Safari 17+ navigator.gpu есть, но device
+ * получить нельзя (или можно, но ONNX Runtime потом падает). Поэтому
+ * пробуем device.requestDevice() и сразу его теряем.
  */
 export async function hasWebGPU(): Promise<boolean> {
   if (typeof navigator === 'undefined' || !('gpu' in navigator)) {
@@ -76,7 +144,12 @@ export async function hasWebGPU(): Promise<boolean> {
     const gpu = (navigator as any).gpu;
     if (!gpu) return false;
     const adapter = await gpu.requestAdapter();
-    return !!adapter;
+    if (!adapter) return false;
+    // Реально пытаемся получить device. На iOS это часто падает.
+    // Если получилось — WebGPU рабочий.
+    const device = await adapter.requestDevice();
+    device.destroy?.();
+    return true;
   } catch {
     return false;
   }

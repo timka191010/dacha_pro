@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { compressImage } from '../../services/aiProviders';
 import { addDiagnosis } from '../../services/storage';
 import { diagnose as runDiagnose, type DiagnoseProgress } from '../../services/diagnose';
-import { getEmbedder } from '../../services/embedding';
+import { getEmbedder, getActiveDevice } from '../../services/embedding';
 import styles from './GardenPage.module.css';
 
 interface Props {
@@ -100,7 +100,10 @@ export function PhotoDiagnoseModal({
         if (p.status === 'progress' && p.progress != null) {
           setLoadingStep(`Загружаю модель: ${Math.round(p.progress)}%`);
         } else if (p.status === 'done' || p.status === 'ready') {
-          setLoadingStep('Модель готова');
+          const dev = getActiveDevice();
+          setLoadingStep(dev ? `Модель готова (${dev.toUpperCase()})` : 'Модель готова');
+        } else if (p.status === 'download') {
+          setLoadingStep(`Скачиваю ${p.name ?? 'модель'}…`);
         }
       });
 
