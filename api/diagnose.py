@@ -112,6 +112,8 @@ def groq_chat(messages: list, model: str, temperature: float, max_tokens: int) -
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json",
+            # Без User-Agent Groq возвращает 403 (проверено 2026-07-16).
+            "User-Agent": "DachaPro/1.0 (Vercel Serverless)",
         },
         method="POST",
     )
