@@ -274,7 +274,15 @@ export function PhotoDiagnoseModal({
         </div>
       )}
 
-      {error && <div className={styles.diagnoseError}>{error}</div>}
+      {error && (
+        <div className={styles.diagnoseError}>
+          <div>{error}</div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>
+            Если ошибка про offset/length — открой Safari → Настройки → Дополнения → Web Inspector
+            и посмотри Console, скопируй полный stack trace.
+          </div>
+        </div>
+      )}
 
       {result && !loading && (
         <>

@@ -185,11 +185,15 @@ function toFloat32Array(data: unknown): Float32Array {
   }
   if (ArrayBuffer.isView(data)) {
     const view = data as ArrayBufferView;
-    const out = new Float32Array(view.byteLength / 4);
-    const src = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-    const dst = new Uint8Array(out.buffer);
+    // Копируем байты в НОВЫЙ буфер, выровненный по границе float32.
+    // Без slice на iOS Safari создание view поверх чужого buffer
+    // кидает "RangeError: offset/length out of bounds".
+    const alignedLen = view.byteLength - (view.byteLength % 4);
+    const buf = new ArrayBuffer(alignedLen);
+    const src = new Uint8Array(view.buffer, view.byteOffset, alignedLen);
+    const dst = new Uint8Array(buf);
     dst.set(src);
-    return out;
+    return new Float32Array(buf);
   }
   if (data instanceof ArrayBuffer) {
     return new Float32Array(data);
