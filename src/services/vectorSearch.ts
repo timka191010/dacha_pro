@@ -58,10 +58,22 @@ let productsCache: { product: RagProduct; vec: Float32Array }[] | null = null;
 // === Декодирование base64 → Float32Array ===
 
 function b64ToFloat32(b64: string): Float32Array {
+  if (!b64) return new Float32Array(0);
   const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
+  // Используем КОПИЮ буфера (slice создаёт новый ArrayBuffer) — иначе
+  // bytes.buffer может указывать на общий буфер atob, и на iOS Safari
+  // создание Float32Array поверх него кидает "RangeError: offset/length".
+  const buf = new ArrayBuffer(binary.length);
+  const bytes = new Uint8Array(buf);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  if (buf.byteLength % 4 !== 0) {
+    // Маловероятно (наш python скрипт всегда пишет 384 float32 = 1536 байт),
+    // но если что-то не так — обрезаем до границы float32.
+    const alignedLen = Math.floor(buf.byteLength / 4) * 4;
+    const aligned = bytes.slice(0, alignedLen);
+    return new Float32Array(aligned.buffer);
+  }
+  return new Float32Array(buf);
 }
 
 // === Загрузка и кэширование индексов ===

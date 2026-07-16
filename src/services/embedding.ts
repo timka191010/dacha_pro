@@ -204,8 +204,23 @@ function toFloat32Array(data: unknown): Float32Array {
   );
 }
 
+/** L2-нормализация вектора (вынесено из WASM — там она иногда падает на iOS). */
+function l2Normalize(v: Float32Array): Float32Array {
+  let sum = 0;
+  for (let i = 0; i < v.length; i++) sum += v[i]! * v[i]!;
+  const norm = Math.sqrt(sum);
+  if (norm === 0) return v;
+  const out = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = v[i]! / norm;
+  return out;
+}
+
 /**
  * Embedding для поискового запроса (с префиксом "query: ").
+ *
+ * ВАЖНО: \`normalize: true\` в WASM-бэкенде на iOS Safari падает с
+ * "RangeError: offset/length out of bounds" в transformers.js v4 + ONNX Runtime Web.
+ * Поэтому вызываем extractor БЕЗ normalize, а L2-нормализацию делаем в JS сами.
  */
 export async function embedQuery(
   text: string,
@@ -215,8 +230,9 @@ export async function embedQuery(
     throw new Error('embedQuery: пустой текст');
   }
   const extractor = await getEmbedder(onProgress);
-  const output = await extractor(`query: ${text}`, { pooling: 'mean', normalize: true });
-  return toFloat32Array(output.data);
+  const output = await extractor(`query: ${text}`, { pooling: 'mean', normalize: false });
+  const raw = toFloat32Array(output.data);
+  return l2Normalize(raw);
 }
 
 /**
@@ -230,8 +246,9 @@ export async function embedPassage(
     throw new Error('embedPassage: пустой текст');
   }
   const extractor = await getEmbedder(onProgress);
-  const output = await extractor(`passage: ${text}`, { pooling: 'mean', normalize: true });
-  return toFloat32Array(output.data);
+  const output = await extractor(`passage: ${text}`, { pooling: 'mean', normalize: false });
+  const raw = toFloat32Array(output.data);
+  return l2Normalize(raw);
 }
 
 /**
@@ -251,7 +268,7 @@ export async function embedPassages(
   const prefixed = texts.map((t) => `passage: ${t}`);
 
   try {
-    const output = await extractor(prefixed, { pooling: 'mean', normalize: true });
+    const output = await extractor(prefixed, { pooling: 'mean', normalize: false });
     const data = toFloat32Array(output.data);
     const dim = 384;
     if (data.length !== texts.length * dim) {
@@ -261,7 +278,7 @@ export async function embedPassages(
     }
     const result: Float32Array[] = [];
     for (let i = 0; i < texts.length; i++) {
-      result.push(data.slice(i * dim, (i + 1) * dim));
+      result.push(l2Normalize(data.slice(i * dim, (i + 1) * dim)));
     }
     return result;
   } catch (batchErr) {
@@ -269,8 +286,8 @@ export async function embedPassages(
     console.warn('[embedding] batch encode failed, falling back to per-item:', batchErr);
     const out: Float32Array[] = [];
     for (const t of prefixed) {
-      const r = await extractor(t, { pooling: 'mean', normalize: true });
-      out.push(toFloat32Array(r.data));
+      const r = await extractor(t, { pooling: 'mean', normalize: false });
+      out.push(l2Normalize(toFloat32Array(r.data)));
     }
     return out;
   }
