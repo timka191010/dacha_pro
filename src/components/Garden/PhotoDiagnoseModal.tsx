@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Modal } from '../shared/Modal';
 import { Camera, Image as ImageIcon, Loader2, Sparkles, BookOpen, ShoppingBag } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { compressImage, isAiAvailable } from '../../services/aiProviders';
+import { compressImage } from '../../services/aiProviders';
 import { addDiagnosis } from '../../services/storage';
 import { diagnose as runDiagnose, type DiagnoseProgress } from '../../services/diagnose';
 import { getEmbedder } from '../../services/embedding';
@@ -70,8 +70,6 @@ export function PhotoDiagnoseModal({
   // === НОВОЕ: ML в браузере + Vercel Function (без отдельного бэкенда) ===
   // Логика теперь в src/services/diagnose.ts — там же RAG-поиск и рекомендации.
   // Groq-ключ спрятан в env на Vercel, не в браузере.
-
-  const aiReady = isAiAvailable();
 
   const handleFile = async (file: File | undefined | null) => {
     if (!file) return;
@@ -157,14 +155,6 @@ export function PhotoDiagnoseModal({
 
   return (
     <Modal open onClose={onClose} title={`Диагностика: ${plantName}`}>
-      {!aiReady && (
-        <div className={styles.diagnoseError}>
-          🔑 Для diagnose Groq-ключ не нужен на фронте — он на сервере.
-          Убедись, что Vercel Function <code>/api/diagnose</code> задеплоена
-          и в её env есть <code>GROQ_API_KEY</code>.
-        </div>
-      )}
-
       <input
         ref={cameraInputRef}
         type="file"
