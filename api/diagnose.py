@@ -1,28 +1,100 @@
 """
 Vercel Serverless Function: /api/diagnose
-
-Заменяет FastAPI эндпоинт /api/diagnose из старого backend/app.py.
-Принимает готовый RAG-контекст от клиента (собран локально через Transformers.js),
-делает два запроса в Groq:
-  1) Vision (llama-4-scout) — диагноз по фото
-  2) Text  (llama-3.1-8b-instant) — финальный ответ по контексту
-Возвращает JSON.
-
-Зачем прокси:
-- GROQ_API_KEY хранится в env Vercel, не в браузере.
-- CORS на Vercel Function: тот же origin, проблем нет.
 """
+from __future__ import annotations  # для совместимости с Python <3.9 (list[str] и т.п.)
 
 from http.server import BaseHTTPRequestHandler
 import json
 import os
 import re
+import math
+from collections import Counter
 
 # === Конфигурация (env) ===
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE = "https://api.groq.com/openai/v1"
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 TEXT_MODEL = "llama-3.1-8b-instant"
+
+# === Пути к данным (Vercel read-only) ===
+# На Vercel __file__ = /var/task/api/diagnose.py
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+# === TF-IDF индекс (загружается один раз при первом запросе) ===
+_INDEX_CACHE = {}
+
+STOP_WORDS = frozenset("""
+и в с по на от из за для что это как но а же бы ли ни не о у к т о в с и п р н л м д я ы ь г з б ч ш щ ж э ю й ц
+the of to in for is at on an be by or not
+""".split())
+
+
+def _tokenize(text: str) -> list[str]:
+    """Токенизация: lowercase, только кириллица + латиница, слова >2 символов, без стоп-слов."""
+    return [w for w in re.findall(r'[а-яёa-z]+', text.lower())
+            if len(w) > 2 and w not in STOP_WORDS]
+
+
+def _load_index(name: str) -> dict:
+    """Ленивая загрузка TF-IDF индекса (один раз)."""
+    if name in _INDEX_CACHE:
+        return _INDEX_CACHE[name]
+    path = os.path.join(_DATA_DIR, name)
+    with open(path, 'r', encoding='utf-8') as f:
+        idx = json.load(f)
+    _INDEX_CACHE[name] = idx
+    return idx
+
+
+def _tfidf_search(query: str, index_name: str, top_k: int = 3,
+                  category_bonus: tuple[str, float] | None = None,
+                  products_lookup: list | None = None) -> list[tuple[int, float]]:
+    """
+    TF-IDF cosine similarity поиск.
+    Возвращает список (doc_index, score), отсортированный по убыванию score.
+    category_bonus: (category_name, bonus_score) — добавляет бонус если у товара эта category.
+    products_lookup: список товаров (нужен для category_bonus).
+    """
+    idx = _load_index(index_name)
+    idf = idx['idf']
+    docs = idx['docs']
+
+    # Вектор запроса
+    q_toks = Counter(w for w in _tokenize(query) if w in idf)
+    if not q_toks:
+        return []
+    q_norm = math.sqrt(sum((v * idf[w]) ** 2 for w, v in q_toks.items()))
+    if q_norm == 0:
+        return []
+
+    scores = []
+    for i, d in enumerate(docs):
+        # Скалярное произведение (с весами IDF с обеих сторон)
+        s = 0.0
+        for w, tf in d['tokens'].items():
+            if w in q_toks:
+                s += tf * idf[w] * q_toks[w] * idf[w]
+        if d['norm'] > 0:
+            s = s / (d['norm'] * q_norm)
+        # Бонус за category (для товаров: защита > удобрение для болезней)
+        if category_bonus and products_lookup:
+            cat, bonus = category_bonus
+            if products_lookup[i].get('category') == cat:
+                s += bonus
+        scores.append((i, s))
+
+    scores.sort(key=lambda x: -x[1])
+    return scores[:top_k]
+
+
+def _load_index_or_empty(name: str) -> list:
+    """Загружает JSON-массив (чанки или товары). При ошибке — пустой массив."""
+    try:
+        with open(os.path.join(_DATA_DIR, name), 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[diagnose] не удалось загрузить {name}: {e}", flush=True)
+        return []
 
 # === Промпты (скопированы из backend/app.py) ===
 
@@ -186,7 +258,8 @@ def build_context_block(hits: list) -> str:
         return "(пусто — в базе знаний нет релевантных фрагментов)"
     parts = []
     for i, h in enumerate(hits, 1):
-        score_pct = round(h.get("score", 0) * 100, 1)
+        # TF-IDF cosine: значения 0..2, нормализуем к 0..100% условно
+        score_pct = min(100, max(0, round(float(h.get("score", 0)) * 50, 1)))
         parts.append(
             f"[{i}] (релевантность {score_pct}%, "
             f'источник: {h.get("source", "?")}, стр. {h.get("page", "?")})\n'
@@ -200,7 +273,7 @@ def build_products_block(products: list) -> str:
         return "(нет подходящих товаров)"
     parts = []
     for i, p in enumerate(products, 1):
-        score_pct = round(p.get("score", 0) * 100, 1)
+        score_pct = min(100, max(0, round(float(p.get("score", 0)) * 50, 1)))
         if p.get("oldPrice"):
             price_str = f"цена: {p['price']} руб. (СКИДКА с {p['oldPrice']})"
         else:
@@ -235,8 +308,6 @@ class handler(BaseHTTPRequestHandler):
             image_base64 = data.get("image_base64", "")
             plant_name = data.get("plant_name", "").strip() or "растение"
             user_note = data.get("user_note", "").strip()
-            rag_context = data.get("rag_context", [])  # top-3 чанка
-            products = data.get("products", [])        # top-3 товара
 
             if not image_base64:
                 self._send(400, {"error": "image_base64 is required"})
@@ -250,12 +321,56 @@ class handler(BaseHTTPRequestHandler):
             words = disease.split()[:3]
             disease = " ".join(words) if words else "неизвестная проблема"
 
-            # 2) RAG-генерация
+            # 2) RAG-поиск по книгам (TF-IDF) — серверная часть
+            # Запрос: диагноз + растение + заметка
+            rag_query = f"{disease} {plant_name} {user_note}".strip()
+            chunks = _load_index_or_empty('chunks.json')  # тексты чанков
+            chunk_hits = _tfidf_search(rag_query, 'tfidf.json', top_k=3)
+            rag_context = []
+            for i, score in chunk_hits:
+                if score <= 0:
+                    continue
+                c = chunks[i]
+                rag_context.append({
+                    "text": c.get("text", ""),
+                    "source": c.get("source", "?"),
+                    "page": c.get("page", "?"),
+                    "score": float(score),
+                })
+
+            # 3) Рекомендации товаров (TF-IDF + бонус за category="защита")
+            products = _load_index_or_empty('products.json')
+            # Запрос для товаров: растение + диагноз (без user_note — шум)
+            product_query = f"{plant_name} {disease}".strip()
+            product_hits = _tfidf_search(
+                product_query, 'products_tfidf.json',
+                top_k=3,
+                category_bonus=("защита", 0.3) if disease != "здоровое" else None,
+                products_lookup=products,
+            )
+            recommended = []
+            for i, score in product_hits:
+                if score <= 0:
+                    continue
+                p = products[i]
+                recommended.append({
+                    "id": p.get("id", ""),
+                    "name": p.get("name", ""),
+                    "category": p.get("category", "прочее"),
+                    "price": p.get("price", 0),
+                    "oldPrice": p.get("oldPrice"),
+                    "inStock": p.get("inStock", True),
+                    "url": p.get("url", ""),
+                    "image": p.get("image", ""),
+                    "score": float(score),
+                })
+
+            # 4) RAG-генерация
             context_block = build_context_block(rag_context)
-            products_block = build_products_block(products)
+            products_block = build_products_block(recommended)
             answer = call_rag(disease, plant_name, context_block, products_block)
 
-            # Формируем sources для UI (используем rag_context, который прислал клиент)
+            # Формируем sources для UI
             sources = [
                 {
                     "score": h.get("score", 0),
@@ -270,7 +385,7 @@ class handler(BaseHTTPRequestHandler):
                 "disease": disease,
                 "answer": answer,
                 "sources": sources,
-                "recommended_products": products,
+                "recommended_products": recommended,
             })
 
         except Exception as e:

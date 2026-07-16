@@ -4,8 +4,7 @@ import { Camera, Image as ImageIcon, Loader2, Sparkles, BookOpen, ShoppingBag } 
 import { useNavigate } from 'react-router-dom';
 import { compressImage } from '../../services/aiProviders';
 import { addDiagnosis } from '../../services/storage';
-import { diagnose as runDiagnose, type DiagnoseProgress } from '../../services/diagnose';
-import { getEmbedder, getActiveDevice } from '../../services/embedding';
+import { diagnose as runDiagnose } from '../../services/diagnose';
 import styles from './GardenPage.module.css';
 
 interface Props {
@@ -92,31 +91,15 @@ export function PhotoDiagnoseModal({
     setError(null);
     setResult(null);
     setSaved(false);
-    setLoadingStep('Загружаю модель…');
+    setLoadingStep('Отправляю на сервер…');
 
     try {
-      // Прелоадим модель с прогрессом (если ещё не загружена)
-      await getEmbedder((p) => {
-        if (p.status === 'progress' && p.progress != null) {
-          setLoadingStep(`Загружаю модель: ${Math.round(p.progress)}%`);
-        } else if (p.status === 'done' || p.status === 'ready') {
-          const dev = getActiveDevice();
-          setLoadingStep(dev ? `Модель готова (${dev.toUpperCase()})` : 'Модель готова');
-        } else if (p.status === 'download') {
-          setLoadingStep(`Скачиваю ${p.name ?? 'модель'}…`);
-        }
+      // RAG-поиск теперь на сервере (TF-IDF BM25) — клиент просто шлёт фото + текст.
+      const data = await runDiagnose({
+        imageBase64: previewBase64,
+        plantName,
+        userNote: note,
       });
-
-      const data = await runDiagnose(
-        {
-          imageBase64: previewBase64,
-          plantName,
-          userNote: note,
-        },
-        (p: DiagnoseProgress) => {
-          setLoadingStep(p.message);
-        }
-      );
       setResult(data);
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -124,17 +107,9 @@ export function PhotoDiagnoseModal({
         raw === 'Load failed' ||
         raw === 'Failed to fetch' ||
         raw === 'NetworkError when attempting to fetch resource';
-      // Чуть более понятный текст для типичных ошибок модели
-      let msg: string;
-      if (isNetwork) {
-        msg = 'Не удалось связаться с сервером. Проверь, что Vercel Function /api/diagnose доступна.';
-      } else if (raw.includes('Range') || raw.includes('out of bounds')) {
-        msg = `Ошибка обработки данных модели: ${raw}. Попробуй обновить страницу (модель перезагрузится).`;
-      } else if (raw.includes('no available backend')) {
-        msg = `Не удалось загрузить ML-модель: ${raw}. Попробуй другой браузер (Chrome/Safari 18+).`;
-      } else {
-        msg = raw;
-      }
+      const msg = isNetwork
+        ? 'Не удалось связаться с сервером. Проверь, что Vercel Function /api/diagnose доступна.'
+        : raw;
       console.error('[PhotoDiagnoseModal] diagnose failed:', e);
       setError(msg);
     } finally {
@@ -274,15 +249,7 @@ export function PhotoDiagnoseModal({
         </div>
       )}
 
-      {error && (
-        <div className={styles.diagnoseError}>
-          <div>{error}</div>
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>
-            Если ошибка про offset/length — открой Safari → Настройки → Дополнения → Web Inspector
-            и посмотри Console, скопируй полный stack trace.
-          </div>
-        </div>
-      )}
+      {error && <div className={styles.diagnoseError}>{error}</div>}
 
       {result && !loading && (
         <>
