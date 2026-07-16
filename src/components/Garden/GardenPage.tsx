@@ -1,14 +1,14 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Camera, ArrowLeft, Sprout, Sparkles } from 'lucide-react';
+import { Plus, Camera, ArrowLeft, Sprout, Sparkles, Carrot, Flower2 } from 'lucide-react';
 import {
   GARDEN_PLANT_CATALOG,
   getUserPlants,
   getDiagnoses,
   getGardenPlants,
 } from '../../services/storage';
-import type { UserPlant, Diagnosis } from '../../types';
+import type { UserPlant, Diagnosis, PlantCategory } from '../../types';
 import { staggerContainer, fadeUp } from '../../utils/motion';
 import { AddPlantModal } from './AddPlantModal';
 import { PlantDetailModal } from './PlantDetailModal';
@@ -24,10 +24,9 @@ type AnyPlant =
  * Страница «Мой сад» — отдельный роут /garden.
  * Доступ без таба снизу — через карусель на главной.
  *
- * Показывает:
- *  - сетку карточек всех растений (предустановленных + пользовательских)
- *  - счётчик фото-диагностик
- *  - кнопку "Сфоткать" прямо на карточке для быстрого доступа
+ * Внутри две вкладки: «Огород» и «Сад». Пресеты разнесены по категориям
+ * в GARDEN_PLANT_CATALOG; пользовательские растения получают категорию
+ * в момент добавления через AddPlantModal.
  */
 export function GardenPage() {
   const navigate = useNavigate();
@@ -45,6 +44,7 @@ export function GardenPage() {
     plantId: string;
     plantName: string;
   } | null>(null);
+  const [activeTab, setActiveTab] = useState<PlantCategory>('огород');
 
   // Синхронизация при фокусе
   useEffect(() => {
@@ -73,6 +73,31 @@ export function GardenPage() {
     return [...presets, ...custom];
   }, [userPlants, enabledMap]);
 
+  // Считаем количество в каждой категории (с учётом toggle пресетов)
+  const counts = useMemo(() => {
+    const acc: Record<PlantCategory, number> = { огород: 0, сад: 0 };
+    for (const p of allPlants) {
+      if (p.kind === 'preset' && !p.enabled) continue;
+      acc[p.data.category] += 1;
+    }
+    return acc;
+  }, [allPlants]);
+
+  // Дефолтный таб — какой больше (при равном — огород)
+  useEffect(() => {
+    if (counts.огород >= counts.сад) {
+      setActiveTab('огород');
+    } else {
+      setActiveTab('сад');
+    }
+  }, [counts.огород, counts.сад]);
+
+  // Растения для текущей вкладки
+  const visiblePlants = useMemo(
+    () => allPlants.filter((p) => p.data.category === activeTab),
+    [allPlants, activeTab],
+  );
+
   // Считаем диагностики по каждому растению
   const diagnosesByPlant = useMemo(() => {
     const map: Record<string, number> = {};
@@ -84,7 +109,7 @@ export function GardenPage() {
 
   const handleDiagnoseClick = (e: React.MouseEvent, plant: AnyPlant) => {
     e.stopPropagation();
-    const id = plant.kind === 'preset' ? plant.data.id : plant.data.id;
+    const id = plant.data.id;
     const name = plant.data.name;
     setDiagnoseTarget({ plantId: id, plantName: name });
   };
@@ -149,14 +174,45 @@ export function GardenPage() {
         </div>
       </motion.div>
 
+      {/* === Табы Огород / Сад === */}
+      <div className={styles.tabs} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'огород'}
+          className={`${styles.tab} ${
+            activeTab === 'огород' ? `${styles.tabActive} ${styles.tabActiveOgorod}` : ''
+          }`}
+          onClick={() => setActiveTab('огород')}
+        >
+          <Carrot size={16} />
+          <span>Огород</span>
+          <span className={styles.tabCount}>{counts.огород}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'сад'}
+          className={`${styles.tab} ${
+            activeTab === 'сад' ? `${styles.tabActive} ${styles.tabActiveSad}` : ''
+          }`}
+          onClick={() => setActiveTab('сад')}
+        >
+          <Flower2 size={16} />
+          <span>Сад</span>
+          <span className={styles.tabCount}>{counts.сад}</span>
+        </button>
+      </div>
+
       <motion.div
         className={styles.grid}
+        key={activeTab}
         variants={staggerContainer}
         initial="hidden"
         animate="show"
       >
-        {allPlants.map((plant) => {
-          const id = plant.kind === 'preset' ? plant.data.id : plant.data.id;
+        {visiblePlants.map((plant) => {
+          const id = plant.data.id;
           const photoCount = diagnosesByPlant[id] ?? 0;
           const isOff = plant.kind === 'preset' && !plant.enabled;
           return (
@@ -193,7 +249,7 @@ export function GardenPage() {
           );
         })}
 
-        {/* Кнопка "Добавить" в виде карточки */}
+        {/* Кнопка "Добавить" в виде карточки (в активной категории) */}
         <motion.button
           className={styles.plantAddCard}
           onClick={() => setAddOpen(true)}
@@ -205,7 +261,9 @@ export function GardenPage() {
           <div className={styles.plantAddIcon}>
             <Plus size={28} />
           </div>
-          <div className={styles.plantAddText}>Добавить растение</div>
+          <div className={styles.plantAddText}>
+            Добавить в {activeTab === 'огород' ? 'огород' : 'сад'}
+          </div>
         </motion.button>
       </motion.div>
 
@@ -214,22 +272,18 @@ export function GardenPage() {
           <AddPlantModal
             onClose={() => setAddOpen(false)}
             onAdded={handlePlantAdded}
+            defaultCategory={activeTab}
           />
         )}
         {detailPlant && (
           <PlantDetailModal
             plant={detailPlant}
             diagnoses={diagnoses.filter(
-              (d) =>
-                d.plantId ===
-                (detailPlant.kind === 'preset' ? detailPlant.data.id : detailPlant.data.id),
+              (d) => d.plantId === detailPlant.data.id,
             )}
             onClose={() => setDetailPlant(null)}
             onDiagnose={() => {
-              const id =
-                detailPlant.kind === 'preset'
-                  ? detailPlant.data.id
-                  : detailPlant.data.id;
+              const id = detailPlant.data.id;
               const name = detailPlant.data.name;
               setDetailPlant(null);
               setDiagnoseTarget({ plantId: id, plantName: name });

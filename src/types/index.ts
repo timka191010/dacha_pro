@@ -71,10 +71,13 @@ export interface AppSettings {
 
 /* ============== Мой сад ============== */
 
+export type PlantCategory = 'огород' | 'сад';
+
 export interface UserPlant {
   id: string;
   name: string;
   emoji: string;
+  category: PlantCategory;
   createdAt: number;
 }
 

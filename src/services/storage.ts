@@ -1,4 +1,4 @@
-import type { CalendarEntry, AiCacheEntry, AppSettings, UserPlant, Diagnosis } from '../types';
+import type { CalendarEntry, AiCacheEntry, AppSettings, UserPlant, Diagnosis, PlantCategory } from '../types';
 
 const KEYS = {
   entries: 'dp:calendar:entries',
@@ -16,16 +16,17 @@ export interface GardenPlant {
   id: string;
   name: string;
   emoji: string;
+  category: PlantCategory;
   enabled: boolean;
 }
 
 /** Предустановленный набор растений для карусели "Мой сад". */
 export const GARDEN_PLANT_CATALOG: Omit<GardenPlant, 'enabled'>[] = [
-  { id: 'tomato', name: 'Томаты', emoji: '🍅' },
-  { id: 'cucumber', name: 'Огурцы', emoji: '🥒' },
-  { id: 'strawberry', name: 'Клубника', emoji: '🍓' },
-  { id: 'apple', name: 'Яблоня', emoji: '🍎' },
-  { id: 'rose', name: 'Розы', emoji: '🌹' },
+  { id: 'tomato', name: 'Томаты', emoji: '🍅', category: 'огород' },
+  { id: 'cucumber', name: 'Огурцы', emoji: '🥒', category: 'огород' },
+  { id: 'strawberry', name: 'Клубника', emoji: '🍓', category: 'огород' },
+  { id: 'apple', name: 'Яблоня', emoji: '🍎', category: 'огород' },
+  { id: 'rose', name: 'Розы', emoji: '🌹', category: 'сад' },
 ];
 
 export function getGardenPlants(): GardenPlant[] {
@@ -144,14 +145,20 @@ export function setSettings(settings: AppSettings): void {
 /* ============== Пользовательские растения ============== */
 
 export function getUserPlants(): UserPlant[] {
-  return read<UserPlant[]>(KEYS.userPlants) ?? [];
+  const raw = read<UserPlant[]>(KEYS.userPlants) ?? [];
+  // Ленивая миграция: у записей, сохранённых до введения категорий,
+  // проставляем дефолт 'огород' (там самый большой набор пресетов).
+  return raw.map((p) =>
+    p.category ? p : { ...p, category: 'огород' as PlantCategory },
+  );
 }
 
-export function addUserPlant(name: string, emoji: string): UserPlant {
+export function addUserPlant(name: string, emoji: string, category: PlantCategory): UserPlant {
   const plant: UserPlant = {
     id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name: name.trim(),
     emoji,
+    category,
     createdAt: Date.now(),
   };
   const all = getUserPlants();

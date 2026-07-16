@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Modal } from '../shared/Modal';
 import { addUserPlant } from '../../services/storage';
-import { Sprout } from 'lucide-react';
+import type { PlantCategory } from '../../types';
+import { Sprout, Carrot, Flower2 } from 'lucide-react';
 import styles from './GardenPage.module.css';
 
 const EMOJIS = [
@@ -14,21 +15,26 @@ const EMOJIS = [
 interface Props {
   onClose: () => void;
   onAdded: () => void;
+  defaultCategory?: PlantCategory;
 }
 
 /**
  * Модалка добавления пользовательского растения.
- * Ввод: название + выбор эмодзи из 40 вариантов.
+ * Ввод: название + выбор эмодзи + выбор категории (огород / сад).
+ *
+ * `defaultCategory` — какой таб активен в `GardenPage` сейчас; с него
+ * начинаем выбор, но юзер может переключить внутри модалки.
  */
-export function AddPlantModal({ onClose, onAdded }: Props) {
+export function AddPlantModal({ onClose, onAdded, defaultCategory = 'огород' }: Props) {
   const [name, setName] = useState('');
   const [emoji, setEmoji] = useState('🌱');
+  const [category, setCategory] = useState<PlantCategory>(defaultCategory);
 
   const canSave = name.trim().length > 0;
 
   const handleSave = () => {
     if (!canSave) return;
-    addUserPlant(name, emoji);
+    addUserPlant(name, emoji, category);
     onAdded();
     onClose();
   };
@@ -61,10 +67,41 @@ export function AddPlantModal({ onClose, onAdded }: Props) {
           ))}
         </div>
 
+        <div className={styles.addLabel}>Категория</div>
+        <div className={styles.categoryPicker} role="radiogroup" aria-label="Категория">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={category === 'огород'}
+            data-cat="огород"
+            className={`${styles.categoryOption} ${
+              category === 'огород' ? styles.categoryOptionActive : ''
+            }`}
+            onClick={() => setCategory('огород')}
+          >
+            <Carrot size={16} />
+            <span>Огород</span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={category === 'сад'}
+            data-cat="сад"
+            className={`${styles.categoryOption} ${
+              category === 'сад' ? styles.categoryOptionActive : ''
+            }`}
+            onClick={() => setCategory('сад')}
+          >
+            <Flower2 size={16} />
+            <span>Сад</span>
+          </button>
+        </div>
+
         <div className={styles.addPreview}>
           <Sprout size={14} />
           <span>
-            Будет добавлено: <strong>{emoji} {name.trim() || 'Без названия'}</strong>
+            Будет добавлено в <strong>{category === 'огород' ? 'Огород' : 'Сад'}</strong>:{' '}
+            <strong>{emoji} {name.trim() || 'Без названия'}</strong>
           </span>
         </div>
 
