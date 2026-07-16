@@ -1,9 +1,11 @@
-import OpenAI from 'openai';
-
 /**
- * Единственный провайдер ИИ для чата — Groq.
- * Бесплатный, ~30 запросов/мин, без оплаты навсегда.
- * https://console.groq.com/ — ключ выдаётся мгновенно после регистрации.
+ * Прокси для Groq через Vercel Function.
+ *
+ * Раньше здесь был прямой вызов Groq OpenAI SDK из браузера.
+ * Теперь все вызовы идут через /api/chat и /api/diagnose на Vercel,
+ * а GROQ_API_KEY хранится в env Vercel, не в браузере.
+ *
+ * См. api/chat.py и api/diagnose.py — там вся логика прокси.
  */
 
 export type ChatRole = 'system' | 'user' | 'assistant';
@@ -19,65 +21,88 @@ export interface StreamCallbacks {
   onError: (err: Error) => void;
 }
 
-/* ============== Системный промпт ============== */
-
-const SYSTEM_PROMPT = `Ты — опытный агроном-консультант для дачников и огородников средней полосы России.
-Даёшь практичные, конкретные советы по уходу за растениями.
-Стиль: дружелюбный, без воды, по делу. Короткие абзацы и маркированные списки.
-Не выдумывай конкретных марок, если не уверен. Учитывай, что пользователь — любитель, а не агроном-профессионал.
-Отвечай на языке пользователя (по умолчанию — русский).`;
-
-/* ============== Groq ============== */
-
-const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
-
-export function isAiAvailable(): boolean {
-  return Boolean(
-    GROQ_KEY && GROQ_KEY.trim() !== '' && !GROQ_KEY.includes('REPLACE_ME')
-  );
-}
-
-const client: OpenAI | null = isAiAvailable()
-  ? new OpenAI({
-      apiKey: GROQ_KEY!,
-      baseURL: 'https://api.groq.com/openai/v1',
-      dangerouslyAllowBrowser: true,
-    })
-  : null;
-
 export interface ChatResult {
   text: string;
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+
 /**
- * Стриминговый запрос к Groq (llama-3.1-8b-instant).
- * Вызывает onChunk по мере поступления токенов, onDone по завершении,
- * onError при ошибке. Возвращает полный текст.
+ * Проверяет, доступен ли бэкенд. Теперь всегда true — Vercel Function
+ * /api/chat есть всегда (на том же origin, что и фронт).
+ * Оставлено для обратной совместимости со старым кодом.
+ */
+export function isAiAvailable(): boolean {
+  return true;
+}
+
+/**
+ * Стриминговый запрос к Groq через /api/chat прокси.
+ * Получает чанки через Server-Sent Events (EventSource).
  */
 export async function chat(
   messages: ChatMessage[],
   cb: StreamCallbacks,
 ): Promise<ChatResult | null> {
-  if (!client) {
-    cb.onError(new Error('Ключ Groq не задан. Откройте .env и впишите VITE_GROQ_API_KEY.'));
-    return null;
-  }
   try {
-    const stream = await client.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
-      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
-      temperature: 0.7,
-      max_tokens: 1000,
-      stream: true,
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages }),
     });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    if (!res.body) {
+      throw new Error('No response body');
+    }
+
+    // Читаем SSE-стрим через ReadableStream
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
     let full = '';
-    for await (const chunk of stream) {
-      const piece = chunk.choices[0]?.delta?.content ?? '';
-      if (piece) {
-        full += piece;
-        cb.onChunk(piece);
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      // SSE: события разделены "\n\n", поля "\n"
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';  // последний (неполный) — обратно в буфер
+
+      for (const event of events) {
+        const lines = event.split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6);
+          if (payload === '[DONE]') {
+            cb.onDone();
+            return { text: full };
+          }
+          try {
+            const obj = JSON.parse(payload);
+            if (obj.error) {
+              throw new Error(obj.error);
+            }
+            if (obj.text) {
+              full += obj.text;
+              cb.onChunk(obj.text);
+            }
+          } catch (e) {
+            // Не парсится — пропускаем
+            if (e instanceof Error && e.message) {
+              throw e;
+            }
+          }
+        }
       }
     }
+
     cb.onDone();
     return { text: full };
   } catch (err) {
@@ -86,40 +111,15 @@ export async function chat(
   }
 }
 
-/* ============== Vision-диагностика (Groq llama-3.2-90b-vision) ============== */
-
-const VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
-
-const VISION_SYSTEM_PROMPT = `Ты — опытный агроном-фитопатолог для дачников средней полосы России.
-Пользователь прислал фото своего растения и краткое описание проблемы.
-
-Дай СТРУКТУРИРОВАННЫЙ ответ СТРОГО в таком формате (каждый раздел с заголовком):
-
-🔍 ДИАГНОЗ
-Кратко (1-2 предложения) что с растением. Если похоже на несколько болезней — перечисли по вероятности.
-
-💡 ЧТО ДЕЛАТЬ
-3-5 конкретных шагов. Нумерованный список. Без воды.
-
-🛒 ПРОДУКТЫ ОРГАНИК МИКС
-Если из перечисленных ниже продуктов что-то подходит — укажи их НАЗВАНИЕ (как в списке). Если ничего не нужно — напиши "Не требуется".
-
-⚠️ КОГДА К СПЕЦИАЛИСТУ
-В каких случаях обращаться в фитосанитарную службу.
-
-Правила:
-- Отвечай по-русски, дружелюбно, без зауми.
-- Не выдумывай продуктов, которых нет в списке.
-- Если фото нечёткое или ты не уверен — честно скажи.
-- Не более 350 слов.`;
+/* ============== Vision-диагностика через /api/diagnose ============== */
 
 /**
- * Отправляет фото больного растения в Groq vision и возвращает диагноз.
+ * Отправляет фото больного растения через /api/diagnose (Vercel Function).
+ * Внутри функции: Groq Vision (диагноз) + RAG-генерация.
  *
- * @param imageBase64 — JPEG в base64 (без префикса data:image/jpeg;base64,)
- * @param plantName — название растения
- * @param userNote — что беспокоит (опционально)
- * @param productList — список доступных продуктов Органик Микс
+ * Эта функция оставлена для обратной совместимости с местами, которые
+ * вызывают её напрямую (без RAG-контекста). PhotoDiagnoseModal использует
+ * новый src/services/diagnose.ts, который собирает RAG-контекст локально.
  */
 export async function diagnosePlant(
   imageBase64: string,
@@ -127,42 +127,33 @@ export async function diagnosePlant(
   userNote: string,
   productList: { name: string; id: string }[],
 ): Promise<{ answer: string; productIds: string[] } | null> {
-  if (!client) {
-    throw new Error('Ключ Groq не задан. Откройте .env и впишите VITE_GROQ_API_KEY.');
-  }
-  const productText = productList
-    .map((p, i) => `${i + 1}. ${p.name} (id: ${p.id})`)
-    .join('\n');
-
-  const userText = [
-    `Растение: ${plantName}.`,
-    userNote.trim() ? `Что беспокоит: ${userNote.trim()}` : 'Опиши состояние по фото.',
-    '',
-    'Доступные продукты Органик Микс:',
-    productText,
-  ].join('\n');
-
   try {
-    const res = await client.chat.completions.create({
-      model: VISION_MODEL,
-      messages: [
-        { role: 'system', content: VISION_SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: userText },
-            {
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
-            },
-          ],
-        },
-      ],
-      temperature: 0.4,
-      max_tokens: 800,
+    const res = await fetch(`${API_BASE}/api/diagnose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_base64: imageBase64,
+        plant_name: plantName,
+        user_note: userNote,
+        rag_context: [],   // пустой — RAG не используется
+        products: productList.map((p) => ({
+          id: p.id,
+          name: p.name,
+          category: 'прочее',
+          price: 0,
+          inStock: true,
+          url: '',
+          image: '',
+        })),
+      }),
     });
 
-    const answer = res.choices[0]?.message?.content ?? '';
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const answer = data.answer || '';
 
     // Простой матчинг: ищем название продукта в ответе
     const lower = answer.toLowerCase();
