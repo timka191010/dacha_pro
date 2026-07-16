@@ -124,9 +124,18 @@ export function PhotoDiagnoseModal({
         raw === 'Load failed' ||
         raw === 'Failed to fetch' ||
         raw === 'NetworkError when attempting to fetch resource';
-      const msg = isNetwork
-        ? 'Не удалось связаться с сервером. Проверь, что Vercel Function /api/diagnose доступна.'
-        : raw;
+      // Чуть более понятный текст для типичных ошибок модели
+      let msg: string;
+      if (isNetwork) {
+        msg = 'Не удалось связаться с сервером. Проверь, что Vercel Function /api/diagnose доступна.';
+      } else if (raw.includes('Range') || raw.includes('out of bounds')) {
+        msg = `Ошибка обработки данных модели: ${raw}. Попробуй обновить страницу (модель перезагрузится).`;
+      } else if (raw.includes('no available backend')) {
+        msg = `Не удалось загрузить ML-модель: ${raw}. Попробуй другой браузер (Chrome/Safari 18+).`;
+      } else {
+        msg = raw;
+      }
+      console.error('[PhotoDiagnoseModal] diagnose failed:', e);
       setError(msg);
     } finally {
       setLoading(false);

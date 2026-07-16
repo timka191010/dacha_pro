@@ -172,16 +172,51 @@ export async function hasWebGPU(): Promise<boolean> {
 }
 
 /**
+ * Безопасно превращает output.data (может быть Float32Array / TypedArray / nested)
+ * в обычный Float32Array. На iOS Safari с WASM-бэкендом output.data иногда
+ * приходит не как плоский массив — попытка сделать new Float32Array() на нём
+ * кидает "Range consisting of offset and length are out of bounds".
+ */
+function toFloat32Array(data: unknown): Float32Array {
+  if (data instanceof Float32Array) {
+    // Создаём КОПИЮ — иначе некоторые браузеры используют общий буфер
+    // и мы не сможем его потом сериализовать / кэшировать.
+    return new Float32Array(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView;
+    const out = new Float32Array(view.byteLength / 4);
+    const src = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    const dst = new Uint8Array(out.buffer);
+    dst.set(src);
+    return out;
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Float32Array(data);
+  }
+  if (Array.isArray(data)) {
+    // Может быть вложенный массив (редко, но бывает)
+    const flat = (data as any).flat(Infinity) as number[];
+    return new Float32Array(flat);
+  }
+  throw new Error(
+    `Unexpected output.data type from model: ${typeof data} / ${(data as any)?.constructor?.name ?? 'unknown'}`
+  );
+}
+
+/**
  * Embedding для поискового запроса (с префиксом "query: ").
  */
 export async function embedQuery(
   text: string,
   onProgress?: ProgressCallback
 ): Promise<Float32Array> {
+  if (!text || !text.trim()) {
+    throw new Error('embedQuery: пустой текст');
+  }
   const extractor = await getEmbedder(onProgress);
   const output = await extractor(`query: ${text}`, { pooling: 'mean', normalize: true });
-  // output.data — Float32Array размерности 384
-  return new Float32Array(output.data as Float32Array);
+  return toFloat32Array(output.data);
 }
 
 /**
@@ -191,28 +226,52 @@ export async function embedPassage(
   text: string,
   onProgress?: ProgressCallback
 ): Promise<Float32Array> {
+  if (!text || !text.trim()) {
+    throw new Error('embedPassage: пустой текст');
+  }
   const extractor = await getEmbedder(onProgress);
   const output = await extractor(`passage: ${text}`, { pooling: 'mean', normalize: true });
-  return new Float32Array(output.data as Float32Array);
+  return toFloat32Array(output.data);
 }
 
 /**
  * Batch-encoding нескольких текстов (быстрее чем по одному).
  * Возвращает массив Float32Array(384).
+ *
+ * ВАЖНО: на iOS Safari с WASM-бэкендом Transformers.js иногда падает в
+ * batch-режиме с "RangeError: offset/length out of bounds" — поэтому если
+ * batch падает, делаем fallback на поштучный encode.
  */
 export async function embedPassages(
   texts: string[],
   onProgress?: ProgressCallback
 ): Promise<Float32Array[]> {
+  if (!texts.length) return [];
   const extractor = await getEmbedder(onProgress);
   const prefixed = texts.map((t) => `passage: ${t}`);
-  const output = await extractor(prefixed, { pooling: 'mean', normalize: true });
-  // output.data — Float32Array длиной texts.length * 384
-  const dim = 384;
-  const data = output.data as Float32Array;
-  const result: Float32Array[] = [];
-  for (let i = 0; i < texts.length; i++) {
-    result.push(data.slice(i * dim, (i + 1) * dim));
+
+  try {
+    const output = await extractor(prefixed, { pooling: 'mean', normalize: true });
+    const data = toFloat32Array(output.data);
+    const dim = 384;
+    if (data.length !== texts.length * dim) {
+      throw new Error(
+        `embedPassages: ожидалось ${texts.length * dim} floats, получено ${data.length}`
+      );
+    }
+    const result: Float32Array[] = [];
+    for (let i = 0; i < texts.length; i++) {
+      result.push(data.slice(i * dim, (i + 1) * dim));
+    }
+    return result;
+  } catch (batchErr) {
+    // Fallback: поштучно. Медленнее, но не падает.
+    console.warn('[embedding] batch encode failed, falling back to per-item:', batchErr);
+    const out: Float32Array[] = [];
+    for (const t of prefixed) {
+      const r = await extractor(t, { pooling: 'mean', normalize: true });
+      out.push(toFloat32Array(r.data));
+    }
+    return out;
   }
-  return result;
 }
