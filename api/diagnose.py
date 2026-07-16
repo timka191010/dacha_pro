@@ -48,39 +48,56 @@ def _load_index(name: str) -> dict:
 
 def _tfidf_search(query: str, index_name: str, top_k: int = 3,
                   category_bonus: tuple[str, float] | None = None,
-                  products_lookup: list | None = None) -> list[tuple[int, float]]:
+                  products_lookup: list | None = None,
+                  keyword_in_name_bonus: float = 0.0) -> list[tuple[int, float]]:
     """
     TF-IDF cosine similarity поиск.
     Возвращает список (doc_index, score), отсортированный по убыванию score.
-    category_bonus: (category_name, bonus_score) — добавляет бонус если у товара эта category.
-    products_lookup: список товаров (нужен для category_bonus).
+
+    Параметры:
+    - category_bonus: (category_name, bonus_score) — бонус если у товара эта category.
+    - products_lookup: список товаров (нужен для category_bonus).
+    - keyword_in_name_bonus: бонус если в name товара есть слово из запроса.
     """
     idx = _load_index(index_name)
     idf = idx['idf']
     docs = idx['docs']
 
-    # Вектор запроса
-    q_toks = Counter(w for w in _tokenize(query) if w in idf)
-    if not q_toks:
+    # Слова запроса, которые есть в idf (для keyword-бонуса)
+    query_words = set(_tokenize(query))
+
+    # Вектор запроса (TF-IDF)
+    q_toks = Counter(w for w in query_words if w in idf)
+    if not q_toks and keyword_in_name_bonus == 0:
         return []
-    q_norm = math.sqrt(sum((v * idf[w]) ** 2 for w, v in q_toks.items()))
+    q_norm = math.sqrt(sum((v * idf[w]) ** 2 for w, v in q_toks.items())) if q_toks else 1
     if q_norm == 0:
-        return []
+        q_norm = 1
 
     scores = []
     for i, d in enumerate(docs):
-        # Скалярное произведение (с весами IDF с обеих сторон)
+        # TF-IDF cosine
         s = 0.0
         for w, tf in d['tokens'].items():
             if w in q_toks:
                 s += tf * idf[w] * q_toks[w] * idf[w]
-        if d['norm'] > 0:
+        if d['norm'] > 0 and q_norm > 0:
             s = s / (d['norm'] * q_norm)
+
         # Бонус за category (для товаров: защита > удобрение для болезней)
         if category_bonus and products_lookup:
             cat, bonus = category_bonus
             if products_lookup[i].get('category') == cat:
                 s += bonus
+
+        # Бонус за keyword в name (если в названии товара есть слово из запроса)
+        if keyword_in_name_bonus > 0 and products_lookup:
+            name_lower = (products_lookup[i].get('name', '') or '').lower()
+            for w in query_words:
+                if len(w) >= 4 and w in name_lower:
+                    s += keyword_in_name_bonus
+                    break  # один бонус за товар, не за каждое слово
+
         scores.append((i, s))
 
     scores.sort(key=lambda x: -x[1])
@@ -258,7 +275,9 @@ def build_context_block(hits: list) -> str:
         return "(пусто — в базе знаний нет релевантных фрагментов)"
     parts = []
     for i, h in enumerate(hits, 1):
-        # TF-IDF cosine: значения 0..2, нормализуем к 0..100% условно
+        # Нормализуем score (TF-IDF cosine * 50) к 0..100%.
+        # На практике значения 0..2, поэтому *50 даёт 0..100.
+        # Берём min(100) на случай если в индексе окажется выброс.
         score_pct = min(100, max(0, round(float(h.get("score", 0)) * 50, 1)))
         parts.append(
             f"[{i}] (релевантность {score_pct}%, "
@@ -338,15 +357,17 @@ class handler(BaseHTTPRequestHandler):
                     "score": float(score),
                 })
 
-            # 3) Рекомендации товаров (TF-IDF + бонус за category="защита")
+            # 3) Рекомендации товаров (TF-IDF + бонусы)
             products = _load_index_or_empty('products.json')
-            # Запрос для товаров: растение + диагноз (без user_note — шум)
+            # Запрос для товаров: растение + диагноз
             product_query = f"{plant_name} {disease}".strip()
+            is_healthy = disease in ("здоровое", "неизвестная проблема")
             product_hits = _tfidf_search(
                 product_query, 'products_tfidf.json',
                 top_k=3,
-                category_bonus=("защита", 0.3) if disease != "здоровое" else None,
+                category_bonus=("защита", 0.3) if not is_healthy else None,
                 products_lookup=products,
+                keyword_in_name_bonus=0.5 if not is_healthy else 0,
             )
             recommended = []
             for i, score in product_hits:
