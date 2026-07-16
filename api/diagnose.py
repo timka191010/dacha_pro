@@ -206,14 +206,6 @@ RAG_SYSTEM_PROMPT = """Ты — опытный агроном-консульта
 [1-3 пункта. Только реально полезное: плодосмена, уборка растительных
 остатков, устойчивые сорта.]
 
-🛒 Подходящие продукты Organic Mix:
-[Сюда ВЫВЕДИ список из блока ПОДХОДЯЩИЕ ПРОДУКТЫ ORGANIC MIX ниже.
-В одну строку через запятую: «🛒 <название 1> (<цена>), <название 2> (<цена>)».
-Если в блоке «(нет подходящих товаров)» — напиши «В каталоге Organic Mix
-пока нет рекомендаций для этого случая».]
-
-📚 Источник: [книга, стр.]
-
 Г. Не пиши вступлений («Исходя из контекста…», «Согласно предоставленным
    данным…»). Сразу по делу.
 Д. Каждый пункт — не длиннее 1 строки на телефоне (≈60-80 символов).
@@ -279,7 +271,7 @@ def call_vision(image_base64: str, plant_name: str, user_note: str) -> str:
     )
 
 
-def call_rag(disease: str, plant_name: str, context_block: str, products_block: str) -> str:
+def call_rag(disease: str, plant_name: str, context_block: str) -> str:
     """Groq Text: финальный RAG-ответ по готовому контексту."""
     user_msg = (
         f"Растение: {plant_name}\n"
@@ -287,10 +279,8 @@ def call_rag(disease: str, plant_name: str, context_block: str, products_block: 
         f"=== КОНТЕКСТ ИЗ ПЕЧАТНЫХ ИСТОЧНИКОВ ===\n"
         f"{context_block}\n"
         f"=== КОНЕЦ КОНТЕКСТА ===\n\n"
-        f"=== ПОДХОДЯЩИЕ ПРОДУКТЫ ORGANIC MIX ===\n"
-        f"{products_block}\n"
-        f"=== КОНЕЦ СПИСКА ПРОДУКТОВ ===\n\n"
-        f"Дай ответ СТРОГО по контексту. Помни: ничего не придумывай."
+        f"Дай ответ строго по формату из system-промпта. Книжные данные в приоритете, "
+        f"но можешь дополнять своими знаниями с пометкой 💡."
     )
     return groq_chat(
         model=TEXT_MODEL,
@@ -423,8 +413,7 @@ class handler(BaseHTTPRequestHandler):
 
             # 4) RAG-генерация
             context_block = build_context_block(rag_context)
-            products_block = build_products_block(recommended)
-            answer = call_rag(disease, plant_name, context_block, products_block)
+            answer = call_rag(disease, plant_name, context_block)
 
             # Формируем sources для UI
             sources = [
