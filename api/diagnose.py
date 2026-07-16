@@ -28,11 +28,36 @@ STOP_WORDS = frozenset("""
 the of to in for is at on an be by or not
 """.split())
 
+# Примитивный русский стемминг: обрезаем самые частые падежные окончания.
+# Это решает проблему "парша" / "парши" / "паршу" / "паршой" — все стеммятся
+# в "парш" и совпадают при поиске. Без стемминга TF-IDF не находил 70%
+# чанков потому что запрос "парша яблони" не матчился с текстом "паршу яблони".
+RU_SUFFIXES = (
+    'ыми', 'ими', 'ого', 'ему', 'ому',
+    'ская', 'ской', 'цкой', 'цкая', 'цкий', 'цкое',
+    'ная', 'ной', 'ное', 'ный', 'ные', 'ным', 'ных', 'ную',
+    'ая', 'ой', 'ое', 'ый', 'ые', 'ым', 'ых', 'ую',
+    'ами', 'ями', 'ах', 'ях', 'ов', 'ев', 'ей', 'ам', 'ям',
+    'ом', 'ем', 'ую', 'юю',
+    'ия', 'ий', 'ие', 'ии', 'ию', 'иё',
+    'а', 'я', 'о', 'е', 'ы', 'и', 'у', 'ю',
+)
+
+
+def _stem(word: str) -> str:
+    if len(word) <= 4:
+        return word
+    for suf in RU_SUFFIXES:
+        if word.endswith(suf) and len(word) - len(suf) >= 4:
+            return word[:-len(suf)]
+    return word
+
 
 def _tokenize(text: str) -> list[str]:
-    """Токенизация: lowercase, только кириллица + латиница, слова >2 символов, без стоп-слов."""
-    return [w for w in re.findall(r'[а-яёa-z]+', text.lower())
-            if len(w) > 2 and w not in STOP_WORDS]
+    """Токенизация + русский стемминг: lowercase, только кириллица + латиница,
+    слова >=4 символов, без стоп-слов, с обрезкой окончаний."""
+    return [_stem(w) for w in re.findall(r'[а-яёa-z]+', text.lower())
+            if len(w) >= 4 and w not in STOP_WORDS]
 
 
 def _load_index(name: str) -> dict:
@@ -278,7 +303,7 @@ def build_context_block(hits: list) -> str:
         # Нормализуем score (TF-IDF cosine * 50) к 0..100%.
         # На практике значения 0..2, поэтому *50 даёт 0..100.
         # Берём min(100) на случай если в индексе окажется выброс.
-        score_pct = min(100, max(0, round(float(h.get("score", 0)) * 50, 1)))
+        score_pct = min(100, max(0, round(float(h.get("score", 0)) * 40, 1)))
         parts.append(
             f"[{i}] (релевантность {score_pct}%, "
             f'источник: {h.get("source", "?")}, стр. {h.get("page", "?")})\n'
@@ -292,7 +317,7 @@ def build_products_block(products: list) -> str:
         return "(нет подходящих товаров)"
     parts = []
     for i, p in enumerate(products, 1):
-        score_pct = min(100, max(0, round(float(p.get("score", 0)) * 50, 1)))
+        score_pct = min(100, max(0, round(float(p.get("score", 0)) * 40, 1)))
         if p.get("oldPrice"):
             price_str = f"цена: {p['price']} руб. (СКИДКА с {p['oldPrice']})"
         else:
