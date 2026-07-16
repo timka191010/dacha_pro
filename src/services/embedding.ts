@@ -27,11 +27,27 @@ env.allowRemoteModels = true;
 // Отключаем загрузку локальных ONNX-файлов по абсолютному пути (только Hub)
 env.localModelPath = '';
 
-// ВАЖНО для iOS Safari: без явного remote-host иногда ломается загрузка
-// ONNX Runtime Web (wasm) бандла с jsDelivr CDN.
+// === КРИТИЧНО для iOS Safari ===
+// Transformers.js по умолчанию грузит ONNX Runtime Web с jsDelivr CDN:
+//   https://cdn.jsdelivr.net/npm/onnxruntime-web@X.Y.Z/dist/ort-wasm-simd-threaded.asyncify.mjs
+//   + .wasm (23 МБ)
+//
+// На iOS Safari 17+ jsDelivr может:
+//   - Залочить MIME type для .mjs (text/javascript vs application/javascript)
+//   - Задержать CORS preflight (Safari строгий preflight)
+//   - Вообще не отдать файл если на устройстве блокировка CDN
+//
+// РЕШЕНИЕ: складываем .mjs в /public/ort/ и принудительно указываем wasmPaths
+// на наш origin. .wasm Vite уже копирует через asset/resource.
+// Строка 11684 transformers.js: если есть wasmPaths — оно НЕ лезет на jsDelivr.
 try {
   // @ts-ignore — поле может отсутствовать в типах
   if (env.backends?.onnx?.wasm) {
+    // @ts-ignore
+    env.backends.onnx.wasm.wasmPaths = {
+      mjs: '/ort/ort-wasm-simd-threaded.asyncify.mjs',
+      wasm: '/ort/ort-wasm-simd-threaded.asyncify.wasm',
+    };
     // @ts-ignore
     env.backends.onnx.wasm.proxy = false;
   }
